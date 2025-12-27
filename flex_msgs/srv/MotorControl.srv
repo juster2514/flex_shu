@@ -1,0 +1,15 @@
+# 请求部分：电机控制信息
+std_msgs/Header header
+
+uint16 motor_frequency
+bool[4] motor_direction
+float32[4] motor_distance
+bool lock_block
+uint16 reset_mode
+
+---
+# 响应部分：电机位置反馈
+std_msgs/Header header
+
+float32[4] motor_position
+

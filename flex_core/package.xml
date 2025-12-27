@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>flex_core</name>
+  <version>1.0.0</version>
+  <description>
+    FlexCore 柔性机械臂控制系统核心包
+    包含电机驱动控制、MFAC 无模型自适应控制、遥控器解析等功能。
+
+  </description>
+  <maintainer email="shu-pi@todo.todo">shu-pi</maintainer>
+  <license>MIT</license>
+
+  <!-- 构建工具 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS2 核心依赖 -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  
+  <!-- 自定义消息包 -->
+  <depend>flex_msgs</depend>
+
+  <!-- 第三方库依赖 -->
+  <depend>yaml-cpp</depend>
+  
+  <!-- Qt5 库（用于串口通信和 GUI） -->
+  <build_depend>libqt5-widgets-dev</build_depend>
+  <build_depend>libqt5-core-dev</build_depend>
+  <build_depend>libqt5-serialport-dev</build_depend>
+  <exec_depend>libqt5-widgets5</exec_depend>
+  <exec_depend>libqt5-core5a</exec_depend>
+  <exec_depend>libqt5-serialport5</exec_depend>
+
+  <!-- 测试依赖 -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <!-- 导出信息 -->
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

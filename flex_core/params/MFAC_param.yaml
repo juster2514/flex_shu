@@ -1,0 +1,6 @@
+%YAML:1.0
+---
+lambda: 0.5
+rho: 0.3
+mu: 3
+eta: 0.8
