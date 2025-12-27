@@ -252,9 +252,16 @@ int FlexCore::CheckFrequency(int16_t channel_value){
  *       - mode=2: 整体控制模式，使用MFAC控制器进行整体控制
  *       - mode=3: 单独电机控制模式，控制单个电机
  * @note 前置条件：channel_8必须为1（使能开关打开）
+ * @note 注意：如果request->reset_mode不是运动模式（2），则调用ProcessResetMode处理复位
  */
 void FlexCore::ProcessControlMode(int mode, flex_msgs::srv::MotorControl::Request::SharedPtr request) {
     if (!channel_8) return; 
+    
+    // 如果reset_mode不是运动模式（2），则处理复位模式
+    if (request->reset_mode != 2) {
+        ProcessResetMode(request);
+        return;
+    }
     
     switch (mode) {
         case 3: // 单独电机控制
@@ -362,6 +369,70 @@ void FlexCore::ProcessGlobalControl(flex_msgs::srv::MotorControl::Request::Share
 }
 
 /**
+ * @brief 处理复位模式
+ * @param request 电机控制服务请求消息（通过引用修改并发送）
+ * @note 功能：处理复位模式请求，确保复位操作完成前不重复发送请求
+ * @note 输入参数：
+ *       - request: 电机控制请求消息（包含reset_mode）
+ * @note 输出参数：无（通过服务调用获取位置反馈）
+ * @note 工作流程：
+ *       1. 检查是否已有复位操作正在进行，如果是则跳过
+ *       2. 设置复位标志，防止重复请求
+ *       3. 调用电机控制服务并等待完成
+ *       4. 如果复位时间小于5秒，则延时等待到5秒
+ *       5. 复位完成后清除标志
+ */
+void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr request) {
+    // 如果复位操作正在进行，跳过本次请求
+    if (reset_in_progress.load()) {
+        RCLCPP_INFO(this->get_logger(), "复位操作正在进行中，跳过本次请求");
+        return;
+    }
+    
+    // 设置复位标志
+    reset_in_progress.store(true);
+    
+    // 记录复位开始时间
+    auto reset_start_time = std::chrono::steady_clock::now();
+    
+    // 等待服务可用
+    while (!motor_control_client->wait_for_service(std::chrono::seconds(1))) {
+        if (!rclcpp::ok()) {
+            RCLCPP_ERROR(this->get_logger(), "服务调用被中断");
+            reset_in_progress.store(false);
+            return;
+        }
+        RCLCPP_INFO(this->get_logger(), "等待 motor_control_service 服务可用...");
+    }
+    
+    auto result = motor_control_client->async_send_request(request);
+    // 等待服务完成，超时时间设置为30秒（足够处理复位等耗时操作）
+    if (result.wait_for(std::chrono::seconds(30)) == std::future_status::ready) {
+        ProcessDriverPositionResponse(result.get());
+        RCLCPP_INFO(this->get_logger(), "复位操作完成");
+    } else {
+        RCLCPP_ERROR(this->get_logger(), "复位服务调用超时");
+    }
+    
+    // 计算复位耗时
+    auto reset_end_time = std::chrono::steady_clock::now();
+    auto reset_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        reset_end_time - reset_start_time).count();
+    
+    // 如果复位时间小于5秒，则延时等待到5秒
+    const int64_t min_reset_time_ms = 5000; // 5秒 = 5000毫秒
+    if (reset_duration < min_reset_time_ms) {
+        int64_t remaining_time_ms = min_reset_time_ms - reset_duration;
+        RCLCPP_INFO(this->get_logger(), "复位耗时 %.3f 秒", reset_duration / 1000.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(remaining_time_ms));
+    } else {
+        RCLCPP_INFO(this->get_logger(), "复位耗时 %.3f 秒", reset_duration / 1000.0);
+    }
+    // 清除复位标志
+    reset_in_progress.store(false);
+}
+
+/**
  * @brief 系统监控线程主循环
  * @note 功能：持续监控系统状态并执行控制逻辑
  * @note 输入参数：无
@@ -373,6 +444,7 @@ void FlexCore::ProcessGlobalControl(flex_msgs::srv::MotorControl::Request::Share
  *       4. 根据控制模式（channel_9）执行相应控制
  *       5. 循环执行，直到ROS2节点关闭
  * @note 运行环境：独立线程中运行（detached thread）
+ * @note 优化：如果复位操作正在进行，跳过发送请求，避免重复响应
  */
 void FlexCore::SystemMonitor(){
     rclcpp::Clock clock;
@@ -382,6 +454,12 @@ void FlexCore::SystemMonitor(){
     while (rclcpp::ok()){
         // 只有当使能开关打开时才发送请求
         if (channel_8) {
+            // 如果复位操作正在进行，跳过本次循环，避免重复发送复位请求
+            if (reset_in_progress.load()) {
+                std::this_thread::sleep_for(loop_delay);
+                continue;
+            }
+            
             auto request = std::make_shared<flex_msgs::srv::MotorControl::Request>();
             request->header.stamp = clock.now();
 
@@ -397,7 +475,7 @@ void FlexCore::SystemMonitor(){
             ProcessControlMode(channel_9, request);
         }
         
-        std::this_thread::sleep_for(loop_delay);
+        // std::this_thread::sleep_for(loop_delay);
     }
 }
 

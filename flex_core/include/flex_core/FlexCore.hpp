@@ -14,6 +14,7 @@
 #include <chrono>
 #include <future>
 #include <thread>
+#include <atomic>
 
 struct FlexParam{
    FlexParam(){
@@ -65,6 +66,7 @@ class FlexCore : public rclcpp::Node{
     void ProcessControlMode(int mode, flex_msgs::srv::MotorControl::Request::SharedPtr request);
     void ProcessIndividualControl(flex_msgs::srv::MotorControl::Request::SharedPtr request);
     void ProcessGlobalControl(flex_msgs::srv::MotorControl::Request::SharedPtr request);
+    void ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr request);
 
     void SystemMonitor();
 
@@ -79,6 +81,9 @@ class FlexCore : public rclcpp::Node{
     bool channel_5,channel_6,channel_8;
 
     Eigen::Vector2f y_k,y_e;
+
+    // 复位状态标志：防止在复位过程中重复发送请求
+    std::atomic<bool> reset_in_progress{false};
 
 
     rclcpp::Subscription<flex_msgs::msg::RemoteControl>::SharedPtr remote_sub;

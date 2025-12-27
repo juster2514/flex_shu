@@ -269,7 +269,7 @@ class DriverControl(Node):
         global motor_reset_flags
         # 使用参数文件中定义的中断引脚
         interrupt_pin = self.motors[motor_idx].StepMotor_interrupt
-        # 注意：Jetson.GPIO 不支持 pull_up_down 参数，因此省略
+        
         GPIO.setup(interrupt_pin, GPIO.IN)
         motor_reset_flags[motor_idx] = False
     
@@ -287,12 +287,7 @@ class DriverControl(Node):
         """中断复位"""
         global motor_reset_flags
         
-        # 使用参数文件中定义的中断引脚
-        # 注意：Jetson.GPIO 不支持 pull_up_down 参数，因此省略
-        for motor in self.motors:
-            GPIO.setup(motor.StepMotor_interrupt, GPIO.IN)
-        
-        motor_reset_flags = [False] * NUM_MOTORS
+        motor_reset_flags = [True] * NUM_MOTORS
     
     def Calculation_time(self, frequency: int, distance: float) -> float:
         """计算运动时间（毫秒）"""
@@ -357,6 +352,9 @@ class DriverControl(Node):
     
     def Position_Reset(self, mode: int):
         """位置复位"""
+        # 重置中断标志，确保复位操作从干净的状态开始
+        self.Interrupt_RESET()
+        
         if mode == RESET_MODE_LOCK:
             # 锁定模式：电机1和3一组，电机2和4一组
             groups = [
@@ -377,6 +375,8 @@ class DriverControl(Node):
                 thread.start()
             for thread in threads:
                 thread.join()
+            
+            self.get_logger().info(f"锁定模式复位完成")
         
         elif mode == RESET_MODE_UNLOCK:
             # 解锁模式：每个电机独立复位
@@ -392,6 +392,8 @@ class DriverControl(Node):
                 thread.start()
             for thread in threads:
                 thread.join()
+            
+            self.get_logger().info(f"解锁模式复位完成")
     
     def Position_RESET_Lock(self, motor_1: MotorParam, motor_2: MotorParam, 
                             group_id: int, interrupt_idx1: int, interrupt_idx2: int):
@@ -510,7 +512,10 @@ class DriverControl(Node):
             if reset_mode == RESET_MODE_MOTION:
                 self._control_motors_parallel(motor_directions, motor_frequency, motor_distances)
             else:
+                # 复位模式：等待复位操作完成
+                self.get_logger().info(f"开始复位操作，模式: {reset_mode}")
                 self.Position_Reset(reset_mode)
+                self.get_logger().info(f"复位操作完成，模式: {reset_mode}")
             
             # 获取当前位置
             positions = [motor.StepMotor_Position for motor in self.motors]
