@@ -1,6 +1,5 @@
 # FlexCore 柔性机械臂控制系统
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 FlexCore 是一个基于 ROS2 的柔性机械臂控制系统，运行在 NVIDIA Jetson 平台上。该系统集成了电机驱动控制、MFAC（无模型自适应控制）算法、遥控器解析和硬件接口控制等功能。
 
@@ -16,7 +15,6 @@ FlexCore 是一个基于 ROS2 的柔性机械臂控制系统，运行在 NVIDIA 
 - [API 文档](#api-文档)
 - [常见问题](#常见问题)
 - [贡献指南](#贡献指南)
-- [许可证](#许可证)
 
 ## ✨ 功能特性
 
