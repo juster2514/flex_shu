@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -53,14 +54,30 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    # 当遥控器节点启动后，启动电机驱动节点
+    start_driver_control_event = RegisterEventHandler(
+        OnProcessStart(
+            target_action=remote_core_node,
+            on_start=[driver_control_node],
+        )
+    )
+
+    # 当电机驱动节点启动后，启动主控制节点
+    start_flex_core_event = RegisterEventHandler(
+        OnProcessStart(
+            target_action=driver_control_node,
+            on_start=[flex_core_node],
+        )
+    )
+
     return LaunchDescription(
         [
             driver_node_name_arg,
             flex_node_name_arg,
             remote_node_name_arg,
-            remote_core_node,
-            flex_core_node,
-            driver_control_node,
+            remote_core_node,  # 首先启动遥控器节点
+            start_driver_control_event,  # 遥控器节点启动后启动电机驱动节点
+            start_flex_core_event,  # 电机驱动节点启动后启动主控制节点
         ]
     )
 

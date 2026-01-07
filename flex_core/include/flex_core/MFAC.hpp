@@ -13,6 +13,7 @@ struct MFACParam{
       rho = config["rho"].as<float>();
       mu = config["mu"].as<float>();
       eta = config["eta"].as<float>();
+      uk_limit = config["uk_limit"].as<float>();
       phi.fill(0);
       phi(0,0) = 10;
       phi(1,1) = 10;
@@ -32,6 +33,7 @@ struct MFACParam{
    float rho ;
    float mu ;
    float eta ;
+   float uk_limit ;
 
    Eigen::Matrix<float, 2, 2> phi;
 

@@ -121,7 +121,7 @@ void MFAC::UpdateUk(const std::shared_ptr<MFACParam>& MFAC){
     
     MFAC->uk = (error.array() < 0.5f).select(0.0f, uk_calculated);
 
-    MFAC->uk = MFACLimit(MFAC->uk,0.18);
+    MFAC->uk = MFACLimit(MFAC->uk, MFAC->uk_limit);
     MFAC->uk_d = MFAC->uk - MFAC->uk_1;
 }
 

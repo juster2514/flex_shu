@@ -449,14 +449,15 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
 void FlexCore::SystemMonitor(){
     rclcpp::Clock clock;
 
-    const std::chrono::milliseconds loop_delay(50);
+    const std::chrono::milliseconds loop_delay(5);
+    const std::chrono::milliseconds loop_delay_reset(500);
 
     while (rclcpp::ok()){
         // 只有当使能开关打开时才发送请求
         if (channel_8) {
             // 如果复位操作正在进行，跳过本次循环，避免重复发送复位请求
             if (reset_in_progress.load()) {
-                std::this_thread::sleep_for(loop_delay);
+                std::this_thread::sleep_for(loop_delay_reset);
                 continue;
             }
             
@@ -475,7 +476,7 @@ void FlexCore::SystemMonitor(){
             ProcessControlMode(channel_9, request);
         }
         
-        // std::this_thread::sleep_for(loop_delay);
+        std::this_thread::sleep_for(loop_delay);
     }
 }
 

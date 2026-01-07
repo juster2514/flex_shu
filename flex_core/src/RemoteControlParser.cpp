@@ -11,15 +11,18 @@
  * @param name 节点名称
  * @note 创建ROS2节点，用于接收和解析遥控器串口数据
  */
-RemoteControlDataParser::RemoteControlDataParser(std::string name):Node(name){
+RemoteControlDataParser::RemoteControlDataParser(std::string name):Node(name), has_new_data_(false){
     RCLCPP_INFO(this->get_logger(), "Start %s",name.c_str());
 }
 
 /**
  * @brief 析构函数：清理资源
- * @note 停止Qt线程并等待其结束，确保资源正确释放
+ * @note 停止Qt线程和定时器，并等待其结束，确保资源正确释放
  */
 RemoteControlDataParser::~RemoteControlDataParser() {
+    if (publish_timer_ && publish_timer_->isActive()) {
+        publish_timer_->stop();
+    }
     if (qt_thread_ && qt_thread_->isRunning()) {
         qt_thread_->quit();
         qt_thread_->wait();
@@ -32,6 +35,7 @@ RemoteControlDataParser::~RemoteControlDataParser() {
  *       1. 创建ROS2话题发布者，发布遥控控制数据
  *       2. 创建Qt线程用于串口通信
  *       3. 初始化串口并连接数据接收回调
+ *       4. 创建定时器以50Hz频率发布数据
  * @note 输入参数：无
  * @note 输出参数：无
  */
@@ -51,6 +55,16 @@ void RemoteControlDataParser::start() {
             connect(remote_control_serial_.get(), &QSerialPort::readyRead, 
                     this, &RemoteControlDataParser::ReadRemoteControlSerialDataCallback,
                     Qt::QueuedConnection); // 使用 QueuedConnection 确保跨线程安全
+            
+            // 创建并启动定时器，以50Hz频率发布数据（20ms间隔）
+            publish_timer_ = std::make_unique<QTimer>();
+            publish_timer_->setInterval(20); // 50Hz = 1000ms / 50 = 20ms
+            publish_timer_->setSingleShot(false);
+            connect(publish_timer_.get(), &QTimer::timeout, 
+                    this, &RemoteControlDataParser::PublishLatestRemoteControlData,
+                    Qt::QueuedConnection);
+            publish_timer_->start();
+            RCLCPP_INFO(this->get_logger(), "Remote control publish rate set to 50Hz (20ms interval)");
         }
     });
 
@@ -89,20 +103,36 @@ bool RemoteControlDataParser::InitRemoteCtrlSerialport(const std::string port_na
  * @note 功能：
  *       1. 读取串口接收缓冲区中的所有数据
  *       2. 解析SBUS格式的遥控数据
- *       3. 发布解析后的遥控控制消息到ROS2话题
+ *       3. 更新缓存的最新遥控数据（不直接发布）
  * @note 输入参数：无（通过Qt信号槽机制自动调用）
- * @note 输出参数：无（通过ROS2话题发布数据）
+ * @note 输出参数：无（数据存储在缓存中，由定时器统一发布）
  */
 void RemoteControlDataParser::ReadRemoteControlSerialDataCallback(){
     QByteArray received_buffer = remote_control_serial_->readAll();
     if (!received_buffer.isEmpty())
     {
-        flex_msgs::msg::RemoteControl remote_ctl_msg;
+        std::lock_guard<std::mutex> lock(msg_mutex_);
         rclcpp::Clock clock;
-        remote_ctl_msg.header.stamp = clock.now();
-        Parser(received_buffer,remote_ctl_msg);
-        remote_ctrl_msg_pub->publish(remote_ctl_msg);
+        latest_remote_ctl_msg_.header.stamp = clock.now();
+        Parser(received_buffer, latest_remote_ctl_msg_);
+        has_new_data_ = true;
+    }
+}
 
+/**
+ * @brief 定时发布回调函数
+ * @note 功能：
+ *       1. 以50Hz频率定时调用（每20ms）
+ *       2. 发布缓存中的最新遥控数据
+ *       3. 确保发布频率稳定在50Hz
+ * @note 输入参数：无（通过Qt定时器自动调用）
+ * @note 输出参数：无（通过ROS2话题发布数据）
+ */
+void RemoteControlDataParser::PublishLatestRemoteControlData() {
+    std::lock_guard<std::mutex> lock(msg_mutex_);
+    if (has_new_data_) {
+        remote_ctrl_msg_pub->publish(latest_remote_ctl_msg_);
+        has_new_data_ = false;
     }
 }
 

@@ -143,26 +143,62 @@ class PCA9685:
         self.bus = smbus.SMBus(i2c_bus)
         self.i2c_addr = address
         
+        # 添加线程锁保护 I2C 操作（smbus 不是线程安全的）
+        self._i2c_lock = threading.Lock()
+        
         # 重置 PCA9685
-        self.write8(PCA9685_MODE1, 0x00)
+        self.reset()
+    
+    def reset(self):
+        """完整重置 PCA9685 芯片"""
+        with self._i2c_lock:
+            try:
+                # 软件复位：写入 MODE1 寄存器，设置 RESTART 位为 0，SLEEP 位为 1
+                # 0x10 = SLEEP 模式，0x80 = RESTART 位清零
+                self.bus.write_byte_data(self.i2c_addr, PCA9685_MODE1, 0x10)
+                time.sleep(0.01)  # 等待复位完成
+                
+                # 退出睡眠模式，启用自动增量
+                # 0x80 = RESTART 位，0x20 = AI (自动增量)
+                self.bus.write_byte_data(self.i2c_addr, PCA9685_MODE1, 0xA0)
+                time.sleep(0.01)  # 等待稳定
+            except Exception as e:
+                print(f"Failed to reset PCA9685: {e}")
+    
+    def stopAllPWM(self):
+        """停止所有 PWM 通道输出（16个通道）"""
+        with self._i2c_lock:
+            try:
+                # 停止所有通道：设置所有通道的 ON 和 OFF 寄存器
+                # 对于每个通道，设置 ON=0, OFF=0 表示始终关闭
+                for channel in range(16):
+                    base_reg = LED0_ON_L + 4 * channel
+                    self.bus.write_byte_data(self.i2c_addr, base_reg, 0x00)
+                    self.bus.write_byte_data(self.i2c_addr, base_reg + 1, 0x00)
+                    self.bus.write_byte_data(self.i2c_addr, base_reg + 2, 0x00)
+                    self.bus.write_byte_data(self.i2c_addr, base_reg + 3, 0x00)
+            except Exception as e:
+                print(f"Failed to stop all PWM channels: {e}")
     
     def write8(self, reg: int, value: int):
-        """写入 8 位寄存器"""
-        try:
-            self.bus.write_byte_data(self.i2c_addr, reg, value)
-        except Exception as e:
-            print(f"Failed to write to I2C device: {e}")
+        """写入 8 位寄存器（线程安全）"""
+        with self._i2c_lock:
+            try:
+                self.bus.write_byte_data(self.i2c_addr, reg, value)
+            except Exception as e:
+                print(f"Failed to write to I2C device: {e}")
     
     def read8(self, reg: int) -> int:
-        """读取 8 位寄存器"""
-        try:
-            return self.bus.read_byte_data(self.i2c_addr, reg)
-        except Exception as e:
-            print(f"Failed to read from I2C device: {e}")
-            return 0
+        """读取 8 位寄存器（线程安全）"""
+        with self._i2c_lock:
+            try:
+                return self.bus.read_byte_data(self.i2c_addr, reg)
+            except Exception as e:
+                print(f"Failed to read from I2C device: {e}")
+                return 0
     
     def setPWMFreq(self, freq: float):
-        """设置 PWM 频率"""
+        """设置 PWM 频率（线程安全）"""
         # 限制频率范围
         freq = max(FREQ_MIN, min(FREQ_MAX, freq))
         
@@ -172,26 +208,33 @@ class PCA9685:
         prescaleval = prescaleval / freq_corrected - 1.0
         prescale = int(prescaleval + 0.5)
         
-        # 读取当前模式并进入睡眠模式
-        oldmode = self.read8(PCA9685_MODE1)
-        newmode = (oldmode & 0x7F) | 0x10
-        
-        self.write8(PCA9685_MODE1, newmode)
-        self.write8(PCA9685_PRESCALE, prescale)
-        self.write8(PCA9685_MODE1, oldmode)
-        
-        time.sleep(0.005)  # 等待振荡器稳定
-        
-        # 启用自动增量
-        self.write8(PCA9685_MODE1, oldmode | 0x80)
+        # 使用锁保护整个频率设置过程（包含多个 I2C 操作）
+        with self._i2c_lock:
+            # 读取当前模式并进入睡眠模式
+            oldmode = self.bus.read_byte_data(self.i2c_addr, PCA9685_MODE1)
+            newmode = (oldmode & 0x7F) | 0x10
+            
+            self.bus.write_byte_data(self.i2c_addr, PCA9685_MODE1, newmode)
+            self.bus.write_byte_data(self.i2c_addr, PCA9685_PRESCALE, prescale)
+            self.bus.write_byte_data(self.i2c_addr, PCA9685_MODE1, oldmode)
+            
+            time.sleep(0.005)  # 等待振荡器稳定
+            
+            # 启用自动增量
+            self.bus.write_byte_data(self.i2c_addr, PCA9685_MODE1, oldmode | 0x80)
     
     def setPWM(self, channel: int, on: int, off: int):
-        """设置 PWM 输出"""
+        """设置 PWM 输出（线程安全，原子操作）"""
         base_reg = LED0_ON_L + 4 * channel
-        self.write8(base_reg, on & 0xFF)
-        self.write8(base_reg + 1, on >> 8)
-        self.write8(base_reg + 2, off & 0xFF)
-        self.write8(base_reg + 3, off >> 8)
+        # 使用锁保护整个 PWM 设置过程，确保原子性
+        with self._i2c_lock:
+            try:
+                self.bus.write_byte_data(self.i2c_addr, base_reg, on & 0xFF)
+                self.bus.write_byte_data(self.i2c_addr, base_reg + 1, on >> 8)
+                self.bus.write_byte_data(self.i2c_addr, base_reg + 2, off & 0xFF)
+                self.bus.write_byte_data(self.i2c_addr, base_reg + 3, off >> 8)
+            except Exception as e:
+                print(f"Failed to set PWM channel {channel}: {e}")
 
 
 class DriverControl(Node):
@@ -206,6 +249,14 @@ class DriverControl(Node):
         
         # 初始化 PCA9685
         self.pca9685 = PCA9685()
+        
+        # 重置 PCA9685 并停止所有电机
+        self.pca9685.reset()
+        self.pca9685.stopAllPWM()
+        self.get_logger().info("PCA9685 已重置，所有电机已停止")
+        
+        # 添加位置更新锁（虽然每个线程操作不同的 motor，但为安全起见添加锁）
+        self._position_lock = threading.Lock()
         
         # 加载电机参数（支持开发路径和安装路径）
         self.motors = []
@@ -298,17 +349,32 @@ class DriverControl(Node):
         return (frequency * time_ms) / TIME_CALCULATION_FACTOR
     
     def Motor_Control(self, motor_id: int, motor: MotorParam, frequency: float, distance: float):
-        """电机控制"""
-        if distance > DISTANCE_THRESHOLD:
-            time_duration_ms = self.Calculation_time(frequency, distance)
-            self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_ON_VALUE)
-            time.sleep(time_duration_ms / 1000.0)
-        
-        self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_OFF_VALUE)
-        
-        # 更新位置
-        direction_mult = self._get_direction_multiplier(motor.motor_direction_flag)
-        motor.StepMotor_Position += direction_mult * distance
+        """电机控制（线程安全）"""
+        try:
+            if distance > DISTANCE_THRESHOLD:
+                time_duration_ms = self.Calculation_time(frequency, distance)
+                # 启动电机
+                self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_ON_VALUE)
+                # 等待指定时间
+                time.sleep(time_duration_ms / 1000.0)
+                # 停止电机
+                self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_OFF_VALUE)
+            else:
+                # 即使距离很小，也要确保电机停止
+                self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_OFF_VALUE)
+            
+            # 更新位置（使用锁保护，确保线程安全）
+            with self._position_lock:
+                direction_mult = self._get_direction_multiplier(motor.motor_direction_flag)
+                motor.StepMotor_Position += direction_mult * distance
+        except Exception as e:
+            # 确保即使发生异常，电机也能停止
+            try:
+                self.pca9685.setPWM(motor_id, PWM_OFF_VALUE, PWM_OFF_VALUE)
+            except:
+                pass
+            self.get_logger().error(f"电机 {motor_id} 控制发生错误: {e}")
+            raise
     
     def Motor_Run_time(self, time_duration_ms: int, motor_id: int):
         """电机运行指定时间"""
@@ -325,30 +391,53 @@ class DriverControl(Node):
     
     def _control_motors_parallel(self, motor_directions: List[int], 
                                   frequency: float, motor_distances: List[float]):
-        """并行控制多个电机（优化：提取重复代码）"""
+        """并行控制多个电机（线程安全版本）"""
         # 设置方向和标志
         for i, motor in enumerate(self.motors):
             GPIO.output(motor.StepMotor_dir, motor_directions[i])
             motor.motor_direction_flag = motor_directions[i]
         
-        # 设置 PWM 频率
+        # 设置 PWM 频率（所有电机共享同一个频率，这是 PCA9685 硬件限制）
         self.pca9685.setPWMFreq(frequency)
         
+        # 记录每个电机的运动参数（用于调试）
+        self.get_logger().debug(f"并行控制电机 - 频率: {frequency} Hz")
+        for i, (direction, distance) in enumerate(zip(motor_directions, motor_distances)):
+            if distance > DISTANCE_THRESHOLD:
+                time_ms = self.Calculation_time(frequency, distance)
+                self.get_logger().debug(
+                    f"电机 {i}: 方向={direction}, 距离={distance:.4f}mm, "
+                    f"预计时间={time_ms:.2f}ms"
+                )
+        
         # 创建并启动线程
-        threads = [
-            threading.Thread(
-                target=self.Motor_Control,
+        threads = []
+        for i, motor in enumerate(self.motors):
+            thread = threading.Thread(
+                target=self._motor_control_wrapper,
                 args=(i, motor, frequency, motor_distances[i])
             )
-            for i, motor in enumerate(self.motors)
-        ]
+            threads.append(thread)
         
+        # 启动所有线程
         for thread in threads:
             thread.start()
         
         # 等待所有线程完成
-        for thread in threads:
+        for i, thread in enumerate(threads):
             thread.join()
+            self.get_logger().debug(f"电机 {i} 线程完成")
+    
+    def _motor_control_wrapper(self, motor_id: int, motor: MotorParam, 
+                               frequency: float, distance: float):
+        """电机控制包装函数（用于线程，添加日志）"""
+        try:
+            self.get_logger().debug(f"电机 {motor_id} 开始运行，距离: {distance:.4f}mm")
+            self.Motor_Control(motor_id, motor, frequency, distance)
+            self.get_logger().debug(f"电机 {motor_id} 运行完成，当前位置: {motor.StepMotor_Position:.4f}mm")
+        except Exception as e:
+            self.get_logger().error(f"电机 {motor_id} 运行失败: {e}")
+            raise
     
     def Position_Reset(self, mode: int):
         """位置复位"""

@@ -12,6 +12,7 @@
 #include <thread>
 #include <QThread>
 #include <QTimer>
+#include <mutex>
 
 
 #include "flex_msgs/msg/remote_control.hpp" 
@@ -51,9 +52,15 @@ class RemoteControlDataParser : public QObject, public rclcpp::Node {
  public slots:
     /**
      * @brief 串口数据接收回调函数（Qt槽函数）
-     * @note 当串口有数据到达时自动调用，解析并发布数据
+     * @note 当串口有数据到达时自动调用，解析数据并更新缓存
      */
     void ReadRemoteControlSerialDataCallback();
+    
+    /**
+     * @brief 定时发布回调函数（Qt槽函数）
+     * @note 以50Hz频率定时发布缓存的最新遥控数据
+     */
+    void PublishLatestRemoteControlData();
     
  private:
     /**
@@ -80,6 +87,18 @@ class RemoteControlDataParser : public QObject, public rclcpp::Node {
 
     /// @brief Qt线程指针，用于串口通信的独立线程
     std::unique_ptr<QThread> qt_thread_;
+    
+    /// @brief 定时器，用于以50Hz频率发布遥控数据
+    std::unique_ptr<QTimer> publish_timer_;
+    
+    /// @brief 最新解析的遥控数据缓存
+    flex_msgs::msg::RemoteControl latest_remote_ctl_msg_;
+    
+    /// @brief 用于保护数据缓存的互斥锁
+    std::mutex msg_mutex_;
+    
+    /// @brief 是否有新数据可发布的标志
+    bool has_new_data_;
 };
 
 #endif
