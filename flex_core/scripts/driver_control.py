@@ -212,19 +212,11 @@ class DriverControl(Node):
         
         self.get_logger().info("参数初始化完成")
         
-        # 初始化 GPIO 和中断
+        # 初始化 GPIO
         for motor in self.motors:
             self._gpio_init(motor)
         
-        for i, motor in enumerate(self.motors):
-            GPIO.add_event_detect(
-                motor.StepMotor_interrupt,
-                GPIO.FALLING,
-                callback=lambda ch, idx=i: self._interrupt_callback(idx),
-                bouncetime=GPIO_BOUNCE_TIME
-            )
-        
-        self.get_logger().info("GPIO 和中断初始化完成")
+        self.get_logger().info("GPIO 初始化完成")
         
         # 创建 ROS2 服务
         self.motor_control_service = self.create_service(
@@ -251,6 +243,31 @@ class DriverControl(Node):
             self.pca9685.setPWM(motor_idx, PWM_OFF_VALUE, PWM_OFF_VALUE)
         except Exception as e:
             self.get_logger().warn(f"停止电机 {motor_idx} PWM 失败: {e}")
+    
+    def _remove_interrupt(self, motor_idx: int):
+        """移除指定电机的中断检测"""
+        motor = self.motors[motor_idx]
+        try:
+            GPIO.remove_event_detect(motor.StepMotor_interrupt)
+        except RuntimeError:
+            # 如果中断检测不存在，忽略错误
+            pass
+    
+    def _add_interrupt(self, motor_idx: int):
+        """添加指定电机的中断检测（如果已存在则先移除）"""
+        motor = self.motors[motor_idx]
+        try:
+            GPIO.remove_event_detect(motor.StepMotor_interrupt)
+        except RuntimeError:
+            pass
+        
+        # 添加新的中断检测
+        GPIO.add_event_detect(
+            motor.StepMotor_interrupt,
+            GPIO.FALLING,
+            callback=lambda ch, idx=motor_idx: self._interrupt_callback(idx),
+            bouncetime=GPIO_BOUNCE_TIME
+        )
     
     def _get_direction_multiplier(self, direction_flag: int) -> int:
         """获取方向乘数"""
@@ -326,26 +343,97 @@ class DriverControl(Node):
         """位置复位：单电机顺序复位"""
         self.Interrupt_RESET()
         
+        # 为所有电机添加中断检测（复位开始时启用）
+        for i in range(NUM_MOTORS):
+            self._add_interrupt(i)
+        
         success_motors = []
         failed_motors = []
         for i in range(NUM_MOTORS):
             success = self.Position_Reset_Single(i)
             if success:
                 success_motors.append(i + 1)
+                # 复位成功后移除中断检测
+                self._remove_interrupt(i)
             else:
                 failed_motors.append(i + 1)
+                # 复位失败也移除中断检测
+                self._remove_interrupt(i)
             time.sleep(0.2)  # 间隔，避免频繁切换 I2C/GPIO
         
         if success_motors:
             self.get_logger().info(f"复位成功：电机 {success_motors}")
         if failed_motors:
             self.get_logger().warn(f"复位失败：电机 {failed_motors}")
+        
+        # 如果所有电机都成功复位，执行补偿移动
+        if len(success_motors) == NUM_MOTORS:
+            self.get_logger().info("所有电机复位成功，开始补偿移动至0.0位置...")
+            self._compensation_move_to_zero()
+    
+    def _compensation_move_to_zero(self):
+        """
+        补偿移动：将所有电机从补偿后的位置移动到0.0位置
+        
+        功能：在复位完成后，根据每个电机的当前位置（已应用补偿），
+        计算需要移动的距离和方向，并行控制所有电机移动到0.0位置
+        """
+        # 使用复位频率进行补偿移动
+        compensation_frequency = 200.0  # 补偿移动频率（Hz）
+        
+        # 计算每个电机需要移动的距离和方向
+        motor_directions = []
+        motor_distances = []
+        
+        with self._position_lock:
+            for i, motor in enumerate(self.motors):
+                current_pos = motor.StepMotor_Position
+                
+                # 计算需要移动的距离（绝对值）
+                distance = abs(current_pos)
+                
+                # 确定运动方向
+                # 如果当前位置 > 0，需要反向运动（方向=0）
+                # 如果当前位置 < 0，需要正向运动（方向=1）
+                # 如果当前位置 = 0，不需要运动
+                if current_pos > DISTANCE_THRESHOLD:
+                    direction = 0  # 反向运动
+                elif current_pos < -DISTANCE_THRESHOLD:
+                    direction = 1  # 正向运动
+                else:
+                    direction = 1  # 默认正向，距离为0时不会运动
+                
+                motor_directions.append(direction)
+                motor_distances.append(distance)
+                
+                self.get_logger().debug(
+                    f"电机 {i + 1}: 当前位置={current_pos:.4f}mm, "
+                    f"目标距离={distance:.4f}mm, 方向={'正向' if direction == 1 else '反向'}"
+                )
+        
+        # 检查是否有电机需要移动
+        total_distance = sum(motor_distances)
+        if total_distance < DISTANCE_THRESHOLD:
+            self.get_logger().info("所有电机已在0.0位置，无需补偿移动")
+            return
+        
+        # 并行控制所有电机移动到0.0位置
+        self._control_motors_parallel(motor_directions, compensation_frequency, motor_distances)
+        
+        # 更新所有电机位置为0.0
+        with self._position_lock:
+            for motor in self.motors:
+                motor.StepMotor_Position = 0.0
+        
+        self.get_logger().info("补偿移动完成，所有电机已到达0.0位置")
     
     def Position_Reset_Single(self, motor_idx: int) -> bool:
         """
         单电机复位
         
-        搜索策略：初始正向运行，超时后切换方向并增加运行时间，直到触发或达到最大运行时间
+        搜索策略：
+        1. 如果中断引脚为低电平（电机在行程开关上），先正向运动离开行程开关
+        2. 初始正向运行，超时后切换方向并增加运行时间，直到触发或达到最大运行时间
         
         参数：
             motor_idx: 电机索引 (0-3)
@@ -358,6 +446,48 @@ class DriverControl(Node):
         motor = self.motors[motor_idx]
         
         self.pca9685.setPWMFreq(motor.StepMotor_Reset_Frequency)
+        
+        # 检查中断引脚状态：如果为低电平，说明电机正在行程开关上
+        interrupt_pin_state = GPIO.input(motor.StepMotor_interrupt)
+        if interrupt_pin_state == GPIO.LOW:
+            self.get_logger().info(f"电机 {motor_idx + 1} 正在行程开关上，先正向运动离开...")
+            
+            # 移除中断检测，避免混乱
+            self._remove_interrupt(motor_idx)
+            
+            # 设置正向方向
+            GPIO.output(motor.StepMotor_dir, GPIO.LOW)
+            motor.motor_direction_flag = 1
+            
+            # 启动电机，正向运动
+            self.pca9685.setPWM(motor_idx, PWM_OFF_VALUE, PWM_ON_VALUE)
+            
+            # 轮询等待引脚变为高电平（离开行程开关）
+            max_wait_time = 5.0  # 最大等待时间（秒）
+            wait_start_time = time.time()
+            while True:
+                current_state = GPIO.input(motor.StepMotor_interrupt)
+                if current_state == GPIO.HIGH:
+                    # 已离开行程开关，停止电机
+                    self.pca9685.setPWM(motor_idx, PWM_OFF_VALUE, PWM_OFF_VALUE)
+                    self.get_logger().info(f"电机 {motor_idx + 1} 已离开行程开关")
+                    break
+                
+                # 检查超时
+                if time.time() - wait_start_time >= max_wait_time:
+                    self.pca9685.setPWM(motor_idx, PWM_OFF_VALUE, PWM_OFF_VALUE)
+                    self.get_logger().warn(f"电机 {motor_idx + 1} 离开行程开关超时")
+                    # 重新添加中断检测
+                    self._add_interrupt(motor_idx)
+                    return False
+                
+                time.sleep(0.02)
+            
+            # 短暂延时，确保稳定
+            time.sleep(0.1)
+            
+            # 重新添加中断检测
+            self._add_interrupt(motor_idx)
         
         current_run_time = RESET_INITIAL_TIME
         current_direction = 1  # 1=正向(LOW), 0=反向(HIGH)
@@ -388,8 +518,13 @@ class DriverControl(Node):
                 
                 if not motor_reset_flags[motor_idx]:
                     self.pca9685.setPWM(motor_idx, PWM_OFF_VALUE, PWM_OFF_VALUE)
-                    motor.StepMotor_Position = 0.0
-                    self.get_logger().info(f"电机 {motor_idx + 1} 复位成功")
+                    
+                    with self._position_lock:
+                        if current_direction == 1:  # 正向运动
+                            motor.StepMotor_Position = 0.0 - motor.Slide_block_compensation
+                        else:  # 反向运动
+                            motor.StepMotor_Position = 0.0 + motor.Slide_block_compensation
+
                     return True
                 
                 time.sleep(0.01)
