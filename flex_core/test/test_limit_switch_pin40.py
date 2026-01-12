@@ -46,12 +46,12 @@ OSC_FREQ = 25000000.0     # 25MHz 振荡器频率
 PWM_RESOLUTION = 4096.0   # 12-bit 分辨率
 
 # GPIO 配置
-GPIO_BOUNCE_TIME = 10  # 中断防抖时间（毫秒）
+GPIO_BOUNCE_TIME = 100  # 中断防抖时间（毫秒）
 
 # 测试配置
-TEST_PIN = 21  # 要测试的引脚号（BCM编码）
-TEST_MOTOR_CHANNEL = 0  # 使用的电机通道（PCA9685通道0）
-TEST_MOTOR_FREQUENCY = 200.0  # 测试电机运行频率（Hz）
+TEST_PIN = 20  # 要测试的引脚号（BCM编码）
+TEST_MOTOR_CHANNEL = 3  # 使用的电机通道（PCA9685通道0）
+TEST_MOTOR_FREQUENCY = 100.0  # 测试电机运行频率（Hz）
 
 # 测试运行序列（秒）：[方向, 运行时间]
 # 正向（LOW）和反向（HIGH）交替运行，时间递增
@@ -63,7 +63,7 @@ TEST_RUN_SEQUENCE = [
 ]
 
 # 方向引脚（需要根据实际情况配置）
-DIRECTION_PIN = 17  # 默认方向引脚，可根据需要修改
+DIRECTION_PIN = 10  # 默认方向引脚，可根据需要修改
 
 # ==================== 全局变量 ====================
 # 行程开关触发标志（True 表示未触发，False 表示已触发）

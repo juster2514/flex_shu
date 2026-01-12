@@ -449,7 +449,7 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
 void FlexCore::SystemMonitor(){
     rclcpp::Clock clock;
 
-    const std::chrono::milliseconds loop_delay(5);
+    const std::chrono::milliseconds loop_delay(20);
     const std::chrono::milliseconds loop_delay_reset(500);
 
     while (rclcpp::ok()){

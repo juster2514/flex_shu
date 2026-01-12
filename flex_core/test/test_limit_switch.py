@@ -53,7 +53,7 @@ OSC_FREQ = 25000000.0     # 25MHz 振荡器频率
 PWM_RESOLUTION = 4096.0   # 12-bit 分辨率
 
 # GPIO 配置
-GPIO_BOUNCE_TIME = 10  # 中断防抖时间（毫秒）
+GPIO_BOUNCE_TIME = 100  # 中断防抖时间（毫秒）
 
 # 测试电机运行频率（Hz）
 TEST_MOTOR_FREQUENCY = 200.0

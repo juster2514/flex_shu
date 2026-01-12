@@ -1,7 +1,7 @@
 %YAML:1.0
 ---
 StepMotor_dir: 23
-StepMotor_interrupt: 11
+StepMotor_interrupt: 26
 StepMotor_Reset_Frequency: 800
 motor_direction_flag: 1
 Slide_block_compensation: 5.0
