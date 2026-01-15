@@ -84,6 +84,10 @@ class FlexCore : public rclcpp::Node{
 
     // 复位状态标志：防止在复位过程中重复发送请求
     std::atomic<bool> reset_in_progress{false};
+    
+    // 上一次的复位模式值：用于检测复位模式的变化，避免重复触发相同的复位操作
+    // 初始化为运动模式(2)，表示系统初始状态为运动模式
+    std::atomic<int16_t> last_reset_mode{2};
 
 
     rclcpp::Subscription<flex_msgs::msg::RemoteControl>::SharedPtr remote_sub;

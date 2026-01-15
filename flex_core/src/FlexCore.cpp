@@ -314,8 +314,8 @@ void FlexCore::ProcessIndividualControl(flex_msgs::srv::MotorControl::Request::S
         }
         
         auto result = motor_control_client->async_send_request(request);
-        // 等待服务完成，超时时间设置为30秒（足够处理复位等耗时操作）
-        if (result.wait_for(std::chrono::seconds(30)) == std::future_status::ready) {
+        // 等待服务完成，超时时间设置为90秒（足够处理复位等耗时操作）
+        if (result.wait_for(std::chrono::seconds(90)) == std::future_status::ready) {
             ProcessDriverPositionResponse(result.get());
         } else {
             RCLCPP_ERROR(this->get_logger(), "服务调用超时");
@@ -378,9 +378,10 @@ void FlexCore::ProcessGlobalControl(flex_msgs::srv::MotorControl::Request::Share
  * @note 工作流程：
  *       1. 检查是否已有复位操作正在进行，如果是则跳过
  *       2. 设置复位标志，防止重复请求
- *       3. 调用电机控制服务并等待完成
+ *       3. 调用电机控制服务并等待完成（超时时间90秒）
  *       4. 如果复位时间小于5秒，则延时等待到5秒
- *       5. 复位完成后清除标志
+ *       5. 复位完成后清除标志并更新状态
+ * @note 超时设置：复位操作超时时间设置为90秒，以适应实际测试中最长的复位时长
  */
 void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr request) {
     // 如果复位操作正在进行，跳过本次请求
@@ -388,6 +389,10 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
         RCLCPP_INFO(this->get_logger(), "复位操作正在进行中，跳过本次请求");
         return;
     }
+    
+    // 记录复位请求时的reset_mode值
+    int16_t reset_mode_requested = request->reset_mode;
+    RCLCPP_INFO(this->get_logger(), "开始复位操作，复位模式: %d", reset_mode_requested);
     
     // 设置复位标志
     reset_in_progress.store(true);
@@ -405,13 +410,19 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
         RCLCPP_INFO(this->get_logger(), "等待 motor_control_service 服务可用...");
     }
     
+    // 发送复位请求并等待完成
     auto result = motor_control_client->async_send_request(request);
-    // 等待服务完成，超时时间设置为30秒（足够处理复位等耗时操作）
-    if (result.wait_for(std::chrono::seconds(30)) == std::future_status::ready) {
+    bool reset_success = false;
+    
+    // 等待服务完成，超时时间设置为90秒（实际测试复位时长最长可能为90秒）
+    const int reset_timeout_seconds = 90;
+    if (result.wait_for(std::chrono::seconds(reset_timeout_seconds)) == std::future_status::ready) {
         ProcessDriverPositionResponse(result.get());
+        reset_success = true;
         RCLCPP_INFO(this->get_logger(), "复位操作完成");
     } else {
-        RCLCPP_ERROR(this->get_logger(), "复位服务调用超时");
+        RCLCPP_ERROR(this->get_logger(), "复位服务调用超时（超过%d秒）", reset_timeout_seconds);
+        reset_success = false;
     }
     
     // 计算复位耗时
@@ -419,17 +430,33 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
     auto reset_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         reset_end_time - reset_start_time).count();
     
-    // 如果复位时间小于5秒，则延时等待到5秒
+    // 如果复位时间小于5秒，则延时等待到5秒（确保复位操作充分完成）
     const int64_t min_reset_time_ms = 5000; // 5秒 = 5000毫秒
     if (reset_duration < min_reset_time_ms) {
         int64_t remaining_time_ms = min_reset_time_ms - reset_duration;
-        RCLCPP_INFO(this->get_logger(), "复位耗时 %.3f 秒", reset_duration / 1000.0);
+        RCLCPP_INFO(this->get_logger(), "复位耗时 %.3f 秒，等待至最小复位时间", reset_duration / 1000.0);
         std::this_thread::sleep_for(std::chrono::milliseconds(remaining_time_ms));
     } else {
         RCLCPP_INFO(this->get_logger(), "复位耗时 %.3f 秒", reset_duration / 1000.0);
     }
+    
     // 清除复位标志
     reset_in_progress.store(false);
+    
+    // 复位完成后，立即检查并更新状态
+    // 读取当前的channel_7值（可能在复位过程中用户已经切换了模式）
+    int16_t current_mode_after_reset = channel_7;
+    
+    // 更新last_reset_mode为当前值，确保状态同步
+    // 如果用户已经切换到运动模式(2)，则更新为2，下次循环会进入运动模式
+    // 如果仍然是复位模式，则更新为当前复位模式值，避免重复触发相同的复位
+    last_reset_mode.store(current_mode_after_reset);
+    
+    if (current_mode_after_reset == 2) {
+        RCLCPP_INFO(this->get_logger(), "复位完成，已切换到运动模式，准备进入运动控制");
+    } else {
+        RCLCPP_INFO(this->get_logger(), "复位完成，当前模式: %d (仍为复位模式)", current_mode_after_reset);
+    }
 }
 
 /**
@@ -438,19 +465,26 @@ void FlexCore::ProcessResetMode(flex_msgs::srv::MotorControl::Request::SharedPtr
  * @note 输入参数：无
  * @note 输出参数：无
  * @note 工作流程：
- *       1. 创建电机控制请求消息
- *       2. 初始化请求参数（频率、方向、距离等）
- *       3. 设置复位模式（来自channel_7）
+ *       1. 检查使能开关（channel_8）
+ *       2. 检测复位模式变化（channel_7）
+ *       3. 创建电机控制请求消息
  *       4. 根据控制模式（channel_9）执行相应控制
- *       5. 循环执行，直到ROS2节点关闭
+ *       5. 更新状态标志
+ *       6. 循环执行，直到ROS2节点关闭
  * @note 运行环境：独立线程中运行（detached thread）
- * @note 优化：如果复位操作正在进行，跳过发送请求，避免重复响应
+ * @note 模式切换检测：
+ *       - 运动模式(2)：总是处理，立即进入运动控制
+ *       - 复位模式变化：新的复位请求，执行复位操作
+ *       - 复位模式未变化：跳过，避免重复触发相同的复位
+ * @note 状态管理：
+ *       - 复位操作的状态更新在ProcessResetMode中完成
+ *       - 运动模式的状态更新在SystemMonitor中完成
  */
 void FlexCore::SystemMonitor(){
     rclcpp::Clock clock;
 
     const std::chrono::milliseconds loop_delay(20);
-    const std::chrono::milliseconds loop_delay_reset(500);
+    const std::chrono::milliseconds loop_delay_reset(5000);
 
     while (rclcpp::ok()){
         // 只有当使能开关打开时才发送请求
@@ -461,6 +495,34 @@ void FlexCore::SystemMonitor(){
                 continue;
             }
             
+            // 获取当前的复位模式值
+            int16_t current_reset_mode = channel_7;
+            int16_t previous_reset_mode = last_reset_mode.load();
+            
+            // 模式切换检测逻辑：
+            // 1. 如果当前是运动模式(2)，总是允许处理（进入运动控制）
+            // 2. 如果当前是复位模式，且与上一次不同，允许处理（新的复位请求）
+            // 3. 如果当前是复位模式，且与上一次相同，跳过（避免重复触发相同的复位）
+            bool should_process = false;
+            
+            if (current_reset_mode == 2) {
+                // 运动模式：总是处理
+                should_process = true;
+            } else if (current_reset_mode != previous_reset_mode) {
+                // 复位模式发生变化：新的复位请求，允许处理
+                should_process = true;
+                RCLCPP_INFO(this->get_logger(), "检测到复位模式变化: %d -> %d", previous_reset_mode, current_reset_mode);
+            } else {
+                // 复位模式未变化：跳过，避免重复触发相同的复位操作
+                should_process = false;
+            }
+            
+            if (!should_process) {
+                std::this_thread::sleep_for(loop_delay);
+                continue;
+            }
+            
+            // 创建请求消息
             auto request = std::make_shared<flex_msgs::srv::MotorControl::Request>();
             request->header.stamp = clock.now();
 
@@ -470,10 +532,20 @@ void FlexCore::SystemMonitor(){
                 request->motor_distance[i] = 0.0;
             }
             request->lock_block = 0;
-            request->reset_mode = channel_7;
+            request->reset_mode = current_reset_mode;
 
             // 发送请求并阻塞等待服务端处理完成
             ProcessControlMode(channel_9, request);
+            
+            // 在处理完成后，更新上一次的复位模式值
+            // 注意：
+            // - 如果执行了复位操作（ProcessResetMode），状态已在ProcessResetMode中更新
+            // - 如果执行了运动模式（ProcessGlobalControl/ProcessIndividualControl），这里更新状态
+            // - 这样可以确保状态同步，避免重复触发相同的操作
+            if (current_reset_mode == 2) {
+                last_reset_mode.store(2);
+            }
+            // 对于复位模式，状态已在ProcessResetMode中统一更新，这里不需要重复更新
         }
         
         std::this_thread::sleep_for(loop_delay);

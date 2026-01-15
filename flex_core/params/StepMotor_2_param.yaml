@@ -4,4 +4,4 @@ StepMotor_dir: 27
 StepMotor_interrupt: 19
 StepMotor_Reset_Frequency: 800
 motor_direction_flag: 1
-Slide_block_compensation: 5.0
+Slide_block_compensation: -1.8

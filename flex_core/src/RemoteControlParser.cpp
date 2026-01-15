@@ -41,7 +41,7 @@ RemoteControlDataParser::~RemoteControlDataParser() {
  */
 void RemoteControlDataParser::start() {
     remote_ctrl_msg_pub = this->create_publisher<flex_msgs::msg::RemoteControl>(
-    "remote_ctrl_data", rclcpp::QoS(30));
+    "remote_ctrl_data", rclcpp::QoS(10));
     
     // 创建并启动 Qt 线程
     qt_thread_ = std::make_unique<QThread>();

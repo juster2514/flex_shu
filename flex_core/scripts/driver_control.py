@@ -48,7 +48,7 @@ PWM_ON_VALUE = 2048
 PWM_OFF_VALUE = 0
 
 # 单电机复位参数（秒）
-RESET_INITIAL_TIME = 5.0      # 初始运行时间
+RESET_INITIAL_TIME = 3.0     # 初始运行时间
 RESET_TIME_INCREMENT = 1.0    # 超时后增加的时间
 RESET_MAX_RUN_TIME = 10.0     # 最大运行时间
 
