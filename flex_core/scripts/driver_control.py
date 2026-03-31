@@ -48,9 +48,9 @@ PWM_ON_VALUE = 2048
 PWM_OFF_VALUE = 0
 
 # 单电机复位参数（秒）
-RESET_INITIAL_TIME = 3.0     # 初始运行时间
+RESET_INITIAL_TIME = 1.0     # 初始运行时间
 RESET_TIME_INCREMENT = 1.0    # 超时后增加的时间
-RESET_MAX_RUN_TIME = 10.0     # 最大运行时间
+RESET_MAX_RUN_TIME = 8.0     # 最大运行时间
 
 # PCA9685 频率限制
 FREQ_MIN = 24
@@ -349,16 +349,18 @@ class DriverControl(Node):
         
         success_motors = []
         failed_motors = []
-        for i in range(NUM_MOTORS):
-            success = self.Position_Reset_Single(i)
+        # 按指定顺序依次复位电机：1 -> 4 -> 3 -> 2
+        reset_sequence = [0, 3, 2, 1]
+        for motor_idx in reset_sequence:
+            success = self.Position_Reset_Single(motor_idx)
             if success:
-                success_motors.append(i + 1)
+                success_motors.append(motor_idx + 1)
                 # 复位成功后移除中断检测
-                self._remove_interrupt(i)
+                self._remove_interrupt(motor_idx)
             else:
-                failed_motors.append(i + 1)
+                failed_motors.append(motor_idx + 1)
                 # 复位失败也移除中断检测
-                self._remove_interrupt(i)
+                self._remove_interrupt(motor_idx)
             time.sleep(0.2)  # 间隔，避免频繁切换 I2C/GPIO
         
         if success_motors:

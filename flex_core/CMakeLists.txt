@@ -24,7 +24,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(flex_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 # ============================================================================
 # 3. 查找第三方库依赖
@@ -52,6 +54,7 @@ qt5_wrap_cpp(remote_parser_moc_src
 # 注意：共享库只包含实现文件，不包含包含 main() 函数的节点文件
 add_library(${PROJECT_NAME} SHARED
   src/FlexCore.cpp
+  src/FlexPathCore.cpp
   src/MFAC.cpp
   src/RemoteControlParser.cpp
   ${remote_parser_moc_src}  # MOC 生成的文件必须添加到库中
@@ -68,8 +71,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   std_msgs
+  geometry_msgs
   yaml-cpp
   flex_msgs
+  ament_index_cpp
 )
 
 # 链接系统库和第三方库
@@ -94,10 +99,27 @@ add_executable(flex_control_core_node
 ament_target_dependencies(flex_control_core_node
   rclcpp
   yaml-cpp
+  geometry_msgs
   flex_msgs
 )
 
 target_link_libraries(flex_control_core_node
+  ${PROJECT_NAME}
+)
+
+# FlexPathCore 路径控制节点
+add_executable(flex_path_core_node
+  node/FlexPathCoreNode.cpp
+)
+
+ament_target_dependencies(flex_path_core_node
+  rclcpp
+  yaml-cpp
+  geometry_msgs
+  flex_msgs
+)
+
+target_link_libraries(flex_path_core_node
   ${PROJECT_NAME}
 )
 
@@ -111,6 +133,7 @@ add_executable(remote_control_core_node
 ament_target_dependencies(remote_control_core_node
   rclcpp
   yaml-cpp
+  geometry_msgs
   flex_msgs
 )
 
@@ -136,6 +159,7 @@ install(TARGETS ${PROJECT_NAME}
 # 安装可执行文件
 install(TARGETS
   flex_control_core_node
+  flex_path_core_node
   remote_control_core_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -152,10 +176,10 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# 安装参数文件
+# 安装参数文件（含 yaml 与 fig8 轨迹 csv）
 install(DIRECTORY params/
   DESTINATION share/${PROJECT_NAME}/params
-  FILES_MATCHING PATTERN "*.yaml" PATTERN "*.yml"
+  FILES_MATCHING PATTERN "*.yaml" PATTERN "*.yml" PATTERN "*.csv"
 )
 
 # 安装 Launch 文件

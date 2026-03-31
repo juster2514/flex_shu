@@ -3,6 +3,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "flex_msgs/msg/remote_control.hpp"
 #include "flex_msgs/msg/driver_control.hpp"
 #include "flex_msgs/msg/driver_callback.hpp"
@@ -90,6 +91,7 @@ class FlexCore : public rclcpp::Node{
     std::atomic<int16_t> last_reset_mode{2};
 
 
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr flex_position_pub_;
     rclcpp::Subscription<flex_msgs::msg::RemoteControl>::SharedPtr remote_sub;
     rclcpp::Client<flex_msgs::srv::MotorControl>::SharedPtr motor_control_client;
 

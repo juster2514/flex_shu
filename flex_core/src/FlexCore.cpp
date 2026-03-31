@@ -15,6 +15,8 @@ FlexCore::FlexCore(std::string name): Node(name){
     MFAC_ptr = std::make_shared<MFAC>("MFAC");
     Flex_ptr = std::make_shared<FlexParam>();
 
+    flex_position_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/flex_position", 10);
+
     remote_sub = this->create_subscription<flex_msgs::msg::RemoteControl>
     ("remote_ctrl_data",1,std::bind(&FlexCore::RemoteCallback,this,std::placeholders::_1));
 
@@ -97,6 +99,16 @@ void FlexCore::ProcessDriverPositionResponse(const flex_msgs::srv::MotorControl:
 
     y_k(0) =  Flex_ptr->x;
     y_k(1) =  Flex_ptr->y;
+
+    if (flex_position_pub_) {
+        geometry_msgs::msg::PointStamped msg;
+        msg.header.stamp = this->get_clock()->now();
+        msg.header.frame_id = "flex_base";
+        msg.point.x = Flex_ptr->x;
+        msg.point.y = Flex_ptr->y;
+        msg.point.z = Flex_ptr->z;
+        flex_position_pub_->publish(msg);
+    }
 }
 
 /**

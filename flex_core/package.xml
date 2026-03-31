@@ -18,12 +18,14 @@
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
   
   <!-- 自定义消息包 -->
   <depend>flex_msgs</depend>
 
   <!-- 第三方库依赖 -->
   <depend>yaml-cpp</depend>
+  <depend>ament_index_cpp</depend>
   
   <!-- Qt5 库（用于串口通信和 GUI） -->
   <build_depend>libqt5-widgets-dev</build_depend>

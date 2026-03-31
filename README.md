@@ -1,7 +1,11 @@
 # 柔性机械臂控制系统
 
 
-基于 ROS2 的柔性机械臂控制系统，运行在 NVIDIA Jetson 平台上。该系统集成了电机驱动控制、MFAC（无模型自适应控制）算法、遥控器解析和硬件接口控制等功能。
+基于 ROS2 的柔性机械臂控制系统，运行在 NVIDIA Jetson 平台上。系统包含：
+1) 遥控器 SBUS 串口解析与 ROS2 发布（`remote_ctrl_data`）
+2) 4 通道步进电机驱动与行程开关安全保护（`motor_control_service`）
+3) MFAC 无模型自适应控制与工作空间坐标输出（`flex_position`）
+4) 预设轨迹路径控制（`flex_path_core_node`，可选）
 
 ## 📋 目录
 
@@ -18,10 +22,11 @@
 ## ✨ 功能特性
 
 - **电机驱动控制**: 基于 PCA9685 PWM 驱动芯片的电机控制，支持多通道 PWM 输出
+- **SBUS 遥控解析**: 从串口解析 SBUS 数据包，生成 10 通道 `channels_value` 并发布到 `remote_ctrl_data`
 - **MFAC 无模型自适应控制**: 实现无模型自适应控制算法，用于柔性机械臂的运动控制
-- **遥控器解析**: 支持多通道遥控器数据解析和处理
 - **GPIO 控制**: 基于 Jetson.GPIO 的硬件 GPIO 控制，支持中断处理
 - **行程开关检测**: 支持行程开关的硬件中断检测和安全保护
+- **路径规划控制（可选）**: 通过遥控器通道选择圆/正方形/三角形/fig8 轨迹
 - **ROS2 集成**: 完整的 ROS2 节点、话题、服务接口
 
 ## 🖥️ 系统要求
@@ -29,6 +34,8 @@
 ### 硬件要求
 - **开发板**: NVIDIA Jetson 系列（Jetson Nano/Xavier/Orin 等）
 - **PCA9685**: I2C PWM 驱动板（地址：0x40，I2C 总线：7）
+- **遥控器串口适配器**: CH341（默认串口 `/dev/ttyCH341USB0`；若你的串口不同需要修改代码）
+- **行程开关**: 4 个电机各自的中断引脚（下降沿触发；依赖硬件上拉电阻）
 
 ### 软件要求
 - **操作系统**: Ubuntu 20.04 / Ubuntu 22.04（推荐）
@@ -46,16 +53,22 @@ flex_shu_ws/
 │   │   ├── include/           # C++ 头文件
 │   │   │   └── flex_core/
 │   │   │       ├── FlexCore.hpp
-│   │   │       └── MFAC.hpp
+│   │   │       ├── FlexPathCore.hpp
+│   │   │       ├── MFAC.hpp
+│   │   │       └── RemoteControlParser.hpp
 │   │   ├── src/               # C++ 源文件
 │   │   │   ├── FlexCore.cpp
-│   │   │   └── MFAC.cpp
+│   │   │   ├── FlexPathCore.cpp
+│   │   │   ├── MFAC.cpp
+│   │   │   └── RemoteControlParser.cpp
 │   │   ├── node/              # ROS2 节点
 │   │   │   ├── FlexCoreNode.cpp
+│   │   │   ├── FlexPathCoreNode.cpp
 │   │   │   └── RemoteCoreNode.cpp
 │   │   ├── scripts/           # Python 脚本
 │   │   │   └── driver_control.py
 │   │   ├── test/              # 测试脚本
+│   │   │   ├── test_limit_switch.py
 │   │   │   └── test_limit_switch_pin40.py
 │   │   ├── launch/            # Launch 文件
 │   │   │   └── driver_control.launch.py
@@ -90,6 +103,8 @@ sudo apt install -y \
     git \
     python3-pip \
     python3-colcon-common-extensions \
+    i2c-tools \
+    libeigen3-dev \
     libyaml-cpp-dev \
     libqt5-widgets-dev \
     libqt5-core-dev \
@@ -103,7 +118,7 @@ sudo apt install -y \
 sudo pip3 install Jetson.GPIO
 
 # 安装其他 Python 依赖
-sudo pip3 install smbus pyyaml
+sudo pip3 install smbus pyyaml numpy
 ```
 
 ### 3. 配置 GPIO 和 I2C 权限
@@ -136,7 +151,7 @@ echo "source ~/flex_shu_ws/install/setup.bash" >> ~/.bashrc
 
 ## 🚀 快速开始
 
-### 启动驱动控制节点
+### 启动控制系统（推荐）
 
 **方法 1: 使用 launch 文件（推荐）**
 ```bash
@@ -144,13 +159,18 @@ source install/setup.bash
 ros2 launch flex_core driver_control.launch.py
 ```
 
-**方法 2: 使用 ros2 run**
+该 `launch` 会按顺序启动：
+1) `remote_control_core_node`（解析遥控 SBUS，并发布 `remote_ctrl_data`）
+2) `driver_control.py`（电机驱动服务端，提供 `motor_control_service`）
+3) `flex_control_core_node`（MFAC 控制，发布 `flex_position`）
+
+**方法 2: 仅启动电机驱动服务（用于联调）**
 ```bash
 source install/setup.bash
 ros2 run flex_core driver_control.py
 ```
 
-**方法 3: 直接运行 Python 脚本**
+**方法 3: 直接运行 Python 脚本（仅启动驱动服务）**
 ```bash
 cd ~/flex_shu_ws
 source install/setup.bash
@@ -166,7 +186,7 @@ source install/setup.bash
 
 # 查看节点列表
 ros2 node list
-# 应该看到: /driver_control
+# 应该至少看到：/driver_control（启动了 launch 时还会看到 remote/flex 节点）
 
 # 查看服务列表
 ros2 service list
@@ -188,6 +208,126 @@ ros2 topic list
 [INFO] [driver_control]: DriverControl 节点已启动，等待服务请求...
 ```
 
+### RealSense D435：启动、录制与回放（含机械臂位置信息）
+
+本节以 RealSense D435 + `realsense2_camera` 为例，开启**深度对齐到彩色图**的话题，并使用 `rosbag2` 同步录制：
+
+- 相机彩色图与内参
+- 对齐到彩色的深度图与内参（便于后续“彩色像素 \((u,v)\) → 深度”直接同像素读取）
+- 机械臂位置信息（常见为 `/joint_states`；如果你的机械臂位姿通过 TF 发布，则需要录 `/tf`）
+
+#### 1) 启动相机（开启对齐深度）
+
+```bash
+source install/setup.bash
+ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
+```
+
+启动后可用如下命令确认关键话题已出现（示例）：
+
+```bash
+ros2 topic list
+# /camera/camera/color/image_raw
+# /camera/camera/color/camera_info
+# /camera/camera/aligned_depth_to_color/image_raw
+# /camera/camera/aligned_depth_to_color/camera_info
+# /tf_static
+```
+
+#### 2) 录制（rosbag2）
+
+推荐录制命令（同时录相机 + 机械臂位置 + TF）：
+
+```bash
+mkdir -p ~/bags
+
+ros2 bag record -o ~/bags/d435_arm_$(date +%Y%m%d_%H%M%S) \
+  /camera/camera/color/image_raw \
+  /camera/camera/color/camera_info \
+  /camera/camera/aligned_depth_to_color/image_raw \
+  /camera/camera/aligned_depth_to_color/camera_info \
+  /tf /tf_static \
+```
+
+停止录制：在录制终端按 `Ctrl+C`。
+
+查看录制信息：
+
+```bash
+ros2 bag info ~/bags/录制目录名
+```
+
+> 说明：
+> - 如果你的系统没有发布 `/joint_states`，请先用 `ros2 topic list | grep joint` 查找实际话题名，并替换录制命令中的 `/joint_states`。
+
+#### 3) 回放（rosbag2）
+
+```bash
+ros2 bag play ~/bags/录制目录名 --clock
+```
+
+回放验证（示例）：
+
+- 图像话题可用 `rqt_image_view` 订阅 `/camera/camera/color/image_raw`
+- 深度话题订阅 `/camera/camera/aligned_depth_to_color/image_raw`
+
+> 提示：对齐深度图通常为 `16UC1`，数值常见单位为“毫米”（离线处理时如需米，可做 `depth_m = depth_raw / 1000.0`；以实际消息 `encoding` 和驱动配置为准）。
+
+### 路径控制 FlexPathCore（可选）
+
+如果希望柔性臂沿预设轨迹运动（圆/正方形/等边三角形/fig8），可启动 `flex_path_core_node`。
+
+#### 1) 启动遥控器 SBUS 解析节点
+
+确保已 source ROS2 环境后启动遥控器解析节点：
+
+```bash
+source install/setup.bash
+ros2 run flex_core remote_control_core_node
+```
+
+启动后应能看到以下关键话题（示例）：
+
+```bash
+ros2 topic list
+# /remote_ctrl_data
+# /rosout
+# （flex_control_core_node 启动后）/flex_position
+# （flex_path_core_node 启动后）/flex_position
+# （仅遥控节点时，其他话题可能不存在）
+```
+
+#### 2) 启动电机驱动服务端
+
+启动并提供电机驱动服务端（提供 `/motor_control_service`）：
+
+```bash
+source install/setup.bash
+
+ros2 run flex_core driver_control.py
+
+# （本节只需启动驱动服务，不需要录制/回放 rosbag2）
+```
+
+启动后可在另一个终端验证：
+
+确认服务类型：
+
+```bash
+ros2 service type /motor_control_service
+```
+
+#### 3) 启动路径控制节点
+
+```bash
+ros2 run flex_core flex_path_core_node
+```
+
+说明：
+- 同一时间只建议运行一个控制节点：`flex_control_core_node`（MFAC整体控制）或 `flex_path_core_node`（路径控制），避免并发向 `motor_control_service` 发送互斥指令。
+- 轨迹选择由遥控器 `channel_5/channel_6` 组合决定：`path_index = (channel_5<<1) | channel_6`。
+- fig8 轨迹会从 `flex_core/params/fig8_workspace.csv` 加载轨迹点。
+
 ## 📖 使用说明
 
 ### 电机控制服务
@@ -197,25 +337,32 @@ ros2 topic list
 ```bash
 # 调用电机控制服务
 ros2 service call /motor_control_service flex_msgs/srv/MotorControl \
-  "{channel: 0, frequency: 200.0, direction: 1, enable: true}"
+  "{reset_mode: 2, motor_frequency: 800.0, motor_direction: [true, true, true, true], motor_distance: [1.0, 1.0, 1.0, 1.0], lock_block: false}"
 ```
+
+### 参数配置
+
+- 电机参数：`src/flex_core/params/StepMotor_{1..4}_param.yaml`（`driver_control.py` / 测试脚本读取），字段包含 `StepMotor_dir`、`StepMotor_interrupt`、`StepMotor_Reset_Frequency`、`motor_direction_flag`、`Slide_block_compensation`
+- MFAC 参数：`src/flex_core/params/MFAC_param.yaml`（`MFAC.cpp` 读取，当前使用相对路径读取；建议从工作空间根目录启动），字段包含 `lambda`、`rho`、`mu`、`eta`、`uk_limit`、`Kp`、`Ki`、`integral_limit`
+- fig8 轨迹：`src/flex_core/params/fig8_workspace.csv`（`flex_path_core_node` 使用）
 
 ### 行程开关测试
 
-运行行程开关测试脚本（测试 40 引脚）：
+运行行程开关测试脚本：
 
+1. 测试四个电机各自行程开关（依次测试）：
+```bash
+cd ~/flex_shu_ws/src/flex_core/test
+python3 test_limit_switch.py
+```
+
+2. 仅测试“40 引脚”行程开关（下降沿中断，5/10/15/20 秒递增序列）：
 ```bash
 cd ~/flex_shu_ws/src/flex_core/test
 python3 test_limit_switch_pin40.py
 ```
 
-测试脚本会执行以下序列：
-1. 正向运行 5 秒
-2. 反向运行 10 秒
-3. 正向运行 15 秒
-4. 反向运行 20 秒
-
-当触发行程开关时，电机会立即停止。
+当触发行程开关时，电机将立即停止。
 
 ### 遥控器数据订阅
 
@@ -260,16 +407,23 @@ colcon test-result --verbose
 ### ROS2 话题
 
 - `/remote_ctrl_data` (flex_msgs/msg/RemoteControl): 遥控器控制数据
-- `/driver_control_data` (flex_msgs/msg/DriverControl): 驱动控制数据
-- `/driver_callback_data` (flex_msgs/msg/DriverCallback): 驱动回调数据
+- `/flex_position` (geometry_msgs/msg/PointStamped): 柔性臂末端工作空间坐标（由 `flex_control_core_node` 发布）
 
 ### ROS2 服务
 
 - `/motor_control_service` (flex_msgs/srv/MotorControl): 电机控制服务
 
+### 消息/服务字段速查
+
+- `flex_msgs/msg/RemoteControl`：`channels_value: uint16[10]`
+- `flex_msgs/srv/MotorControl/Request`：`motor_frequency: uint16`、`motor_direction: bool[4]`、`motor_distance: float32[4]`、`lock_block: bool`、`reset_mode: uint16`
+- `flex_msgs/srv/MotorControl/Response`：`motor_position: float32[4]`
+
 ### 主要类
 
 - **FlexCore**: 核心控制类，实现 MFAC 控制和遥控器解析
+- **FlexPathCore**: 基于路径规划的自动控制类（路径控制节点）
+- **RemoteControlDataParser**: 遥控器 SBUS 解析与 `remote_ctrl_data` 发布
 - **PCA9685**: PWM 驱动芯片控制类
 
 ## ❓ 常见问题
@@ -312,6 +466,24 @@ source install/setup.bash
 1. 确认硬件上拉电阻已连接（下降沿触发需要上拉）
 2. 检查引脚配置是否正确
 3. 验证中断引脚初始状态应为高电平
+
+### 串口遥控器无法打开
+
+**问题**：RemoteControl 解析节点启动后无法打开串口，或没有发布 `remote_ctrl_data`。
+
+**解决**：
+1. RemoteControl 解析节点默认读取 `/dev/ttyCH341USB0`（若你的串口不同，需要修改 `RemoteControlParser.cpp` 中的 `InitRemoteCtrlSerialport(...)` 参数）
+2. 检查串口设备：`ls /dev/ttyUSB* /dev/ttyCH* 2>/dev/null`
+3. 检查权限：必要时给串口设备所在组（如 `dialout`）授予权限，或先用 `sudo` 启动验证串口可读
+
+### MFAC 参数文件找不到
+
+**问题**：启动 `flex_control_core_node` 时提示找不到 `MFAC_param.yaml`。
+
+**解决**：
+1. 当前 `MFAC.cpp` 使用相对路径 `./src/flex_core/params/MFAC_param.yaml` 读取参数
+2. 建议从工作空间根目录启动：例如 `cd ~/flex_shu_ws` 后再执行 `ros2 launch ...`
+3. 若你希望从任意目录启动，需把 `MFAC.cpp` 参数读取逻辑改为使用安装路径（`ament_index_cpp`）
 
 
 ### 代码规范
